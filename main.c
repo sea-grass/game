@@ -9,6 +9,7 @@
 #include <string.h>
 
 #define GRAV 9.81
+float floorLevel = -1.0;
 
 /* dx, dy, dz cannot be updated without first locking updatePosition */
 pthread_mutex_t updatePosition;
@@ -302,9 +303,14 @@ void display() {
 }
 void update() {
   float y;
+  float x, z;
+  float w, h;
 
   getTriangleValues(triangle, NULL, &y, NULL, NULL, NULL);
-  if (y > -2.0) {
+
+  //getTriangleValues(triangle, &x, &y, &z, &w, &h);
+  //fprintf(stderr, "T: %2.3lf, %2.3lf, %2.3lf - %2.3lfx%2.3lf\n", x, y, z, w, h);
+  if (y > floorLevel) {
     pthread_mutex_lock(&updatePosition);
     dy += -GRAV; /* gravity LOL */
     pthread_mutex_unlock(&updatePosition);
