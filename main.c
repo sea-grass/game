@@ -1,64 +1,69 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include "game.h"
-#include <GL/glut.h>
-#include <pthread.h>
-#include <unistd.h>
-#include <time.h>
-#include <sys/time.h>
+#if __STDC_VERSION__ >= 199901L
+#define _XOPEN_SOURCE 600
+#else
+#define _XOPEN_SOURCE 500
+#endif /* __STDC_VERSION__ */
 
-pthread_t worker;
-pthread_attr_t attr;
+#include "game.h"
+#include <pthread.h>
+
+#define GRAV 9.81
+
+
+/* dx, dy, dz cannot be updated without first locking updatePosition */
 pthread_mutex_t updatePosition;
 float dx = 0, dy = 0, dz = 0;
 
+/* worker watches dx, dy, dz for changes and updates player coordinates */
+pthread_t worker;
+pthread_attr_t attr;
+
 int width = 0, height = 0;
+
+/* helper function to get time in seconds, with milliseconds */
 float startTime;
 float gettime();
+/* helper function to sleep for less than a second */
+void sleepfor(float s);
 
+/* triangle represents the player shape - x, y, z, w, h */
 float triangle[5] = { 0.0, 0.0, -10.0, 1.0, 1.0 };
+/* translate will add x, y, z to triangle's x, y, and z */
 void translate(float x, float y, float z);
+/* drawTriangle will draw triangle to the screen */
+void drawTriangle();
+/* getTrianglesValues is a helper function to get triangle values (not
+   so useful until triangle is not a global...) */
 void getTriangleValues(float* x, float* y, float* z, float* w, float* h);
-void printTriangle(void) {
-  float x, y, z;
-  getTriangleValues(&x, &y, &z, NULL, NULL);
-
-  fprintf(stderr, "t: %2.3lf, %2.3lf, %2.3lf\n", x, y, z);
-}
+/* printTriangle is used to print debugging information about triangle */
+void printTriangle(void);
 
 typedef enum {
   KEY_UP = 0,
   KEY_DOWN
 } KeyEventType;
-typedef struct {
-  unsigned char key;
-  KeyEventType type;
-} KeyEvent;
-typedef struct {
-  KeyEvent *keys;
-} KeyEventList;
-
 enum {
   UP = 0,
   DOWN = 1,
   LEFT = 2,
   RIGHT = 3
 };
+/* keys is used to determine the state of the arrow keys at any time */
 KeyEventType keys[4] = { KEY_UP, KEY_UP, KEY_UP, KEY_UP };
-//KeyEventType keys[126 - 32];
 
 void initThreads(void);
 void initGlut(void);
 void init(void);
+
 void reshape(int w, int h);
 void display(void);
 void update(void);
 void keyboard(int key, int x, int y);
 void keyboardUp(int key, int x, int y);
-void pushKey(unsigned char key, float time);
-void drawTriangle();
-void updateTriangle(float p1[3], float p2[3], float p3[3]);
+
+/* the worker thread */
 void *Worker(void *_data);
+
 int main(int argc, char **argv) {
   glutInit(&argc, argv);
   glutInitDisplayMode(GLUT_DOUBLE | GLUT_DEPTH | GLUT_RGBA);
@@ -84,15 +89,21 @@ float gettime() {
     startTime = (float)(now.tv_sec + (float)now.tv_usec/1000000.0);
   return (float)(now.tv_sec + (float)now.tv_usec/1000000.0 - startTime);
 }
+/* sleep for less than a second, hurrah! */
+void sleepfor(float s) {
+  struct timespec tim, tim2;
+  tim.tv_sec = (int) s;
+  s = s - tim.tv_sec;
+  // note: not sure if I calculated this right... come back later
+  tim.tv_nsec = s * (10^9);
+  nanosleep(&tim, &tim2);
+}
 void *Worker(void *_data) {
   float tid;
   float prevtime, currtime;
   float dt;
   float _dx = 0.0, _dy = 0.0, _dz = 0.0;
   float dif = 0.9;
-  struct timespec tim, tim2;
-  tim.tv_sec = 0;
-  tim.tv_nsec = 100000000L;
 
   tid = *((float*)(_data));
   fprintf(stderr, "I am worker %2lf ready to update the triangle!\n", tid);
@@ -137,7 +148,7 @@ void *Worker(void *_data) {
     translate(_dx, _dy, _dz);
 
     prevtime = currtime;
-    nanosleep(&tim, &tim2);
+    sleepfor(0.1); /* sleep for 0.1 seconds */
   }
   pthread_exit(NULL);
 }
@@ -245,7 +256,7 @@ void update() {
   getTriangleValues(NULL, &y, NULL, NULL, NULL);
   if (y > -2.0) {
     pthread_mutex_lock(&updatePosition);
-    dy += -0.1; /* gravity LOL */
+    dy += -GRAV; /* gravity LOL */
     pthread_mutex_unlock(&updatePosition);
   }
   pthread_mutex_lock(&updatePosition);
@@ -288,4 +299,10 @@ void drawTriangle() {
     glVertex3f(points[i][0], points[i][1], points[i][2]);
   }
   glEnd();
+}
+void printTriangle(void) {
+  float x, y, z;
+  getTriangleValues(&x, &y, &z, NULL, NULL);
+
+  fprintf(stderr, "t: %2.3lf, %2.3lf, %2.3lf\n", x, y, z);
 }

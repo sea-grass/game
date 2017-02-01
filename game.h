@@ -1,16 +1,14 @@
 #ifndef GAME
 #define GAME
-#ifdef __APPLE__
-#include <OpenGL/gl.h>
-#include <OpenGL/glu.h>
-#include <GLUT/glut.h>
-#endif
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+#include <sys/time.h>
+#include <unistd.h>
 
-#ifdef linux
 #include <GL/gl.h>
 #include <GL/glu.h>
 #include <GL/glut.h>
-#endif
 
 typedef enum {
   BLACK = 0,
