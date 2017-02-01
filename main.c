@@ -6,37 +6,34 @@
 
 #include "game.h"
 #include <pthread.h>
+#include <string.h>
 
 #define GRAV 9.81
-
 
 /* dx, dy, dz cannot be updated without first locking updatePosition */
 pthread_mutex_t updatePosition;
 float dx = 0, dy = 0, dz = 0;
 
+/* vpx, vpy, vpz - viewpoint coordinates in the world */
+float vpx = 0.0, vpy = 0.0, vpz = 0.0;
+
 /* worker watches dx, dy, dz for changes and updates player coordinates */
-pthread_t worker;
+pthread_t worker,
+          debug;
 pthread_attr_t attr;
+
+/* a list of shapes to be drawn to screen */
+ShapeList *shapeList;
+Shape *triangle;
 
 int width = 0, height = 0;
 
 /* helper function to get time in seconds, with milliseconds */
 float startTime;
 float gettime();
+
 /* helper function to sleep for less than a second */
 void sleepfor(float s);
-
-/* triangle represents the player shape - x, y, z, w, h */
-float triangle[5] = { 0.0, 0.0, -10.0, 1.0, 1.0 };
-/* translate will add x, y, z to triangle's x, y, and z */
-void translate(float x, float y, float z);
-/* drawTriangle will draw triangle to the screen */
-void drawTriangle();
-/* getTrianglesValues is a helper function to get triangle values (not
-   so useful until triangle is not a global...) */
-void getTriangleValues(float* x, float* y, float* z, float* w, float* h);
-/* printTriangle is used to print debugging information about triangle */
-void printTriangle(void);
 
 typedef enum {
   KEY_UP = 0,
@@ -46,10 +43,12 @@ enum {
   UP = 0,
   DOWN = 1,
   LEFT = 2,
-  RIGHT = 3
+  RIGHT = 3,
+  CTRL = 4,
+  SPACE = 5
 };
 /* keys is used to determine the state of the arrow keys at any time */
-KeyEventType keys[4] = { KEY_UP, KEY_UP, KEY_UP, KEY_UP };
+KeyEventType keys[6] = { KEY_UP, KEY_UP, KEY_UP, KEY_UP, KEY_UP, KEY_UP };
 
 void initThreads(void);
 void initGlut(void);
@@ -59,10 +58,13 @@ void reshape(int w, int h);
 void display(void);
 void update(void);
 void keyboard(int key, int x, int y);
+void _keyboard(unsigned char key, int x, int y);
 void keyboardUp(int key, int x, int y);
+void _keyboardUp(unsigned char key, int x, int y);
 
 /* the worker thread */
 void *Worker(void *_data);
+void *Debug(void *_data);
 
 int main(int argc, char **argv) {
   glutInit(&argc, argv);
@@ -71,7 +73,9 @@ int main(int argc, char **argv) {
   glutInitWindowPosition(0, 0);
   glutCreateWindow("Hello world");  
   glutSpecialFunc(keyboard);
+  glutKeyboardFunc(_keyboard);
   glutSpecialUpFunc(keyboardUp);
+  glutKeyboardUpFunc(_keyboardUp);
   glutReshapeFunc(reshape);
   glutDisplayFunc(display);
   glutIdleFunc(update);
@@ -85,19 +89,24 @@ float gettime() {
   struct timeval now;
 
   gettimeofday(&now, NULL);
+
   if (startTime == 0)
     startTime = (float)(now.tv_sec + (float)now.tv_usec/1000000.0);
   return (float)(now.tv_sec + (float)now.tv_usec/1000000.0 - startTime);
 }
+
 /* sleep for less than a second, hurrah! */
 void sleepfor(float s) {
   struct timespec tim, tim2;
+
   tim.tv_sec = (int) s;
   s = s - tim.tv_sec;
   // note: not sure if I calculated this right... come back later
   tim.tv_nsec = s * (10^9);
+
   nanosleep(&tim, &tim2);
 }
+
 void *Worker(void *_data) {
   float tid;
   float prevtime, currtime;
@@ -113,8 +122,8 @@ void *Worker(void *_data) {
     if (prevtime == 0) prevtime = currtime;
     dt = currtime - prevtime;
 
-    pthread_mutex_lock(&updatePosition);
     if (_dx != 0 || _dy != 0 || _dx != 0) _dx = _dy = _dz = 0;
+    pthread_mutex_lock(&updatePosition);
     if (keys[UP] == KEY_DOWN) {
       dy += dif;
     }
@@ -127,33 +136,67 @@ void *Worker(void *_data) {
     if (keys[RIGHT] == KEY_DOWN) {
       dx += dif;
     }
+    /* if there are changes in dx or dy, absorb them and scale by time elapsed */
     if (dx != 0) {
       _dx = dx * dt;
-      fprintf(stderr, "dy is: %lf", dx);
       dx = 0.0;
-      fprintf(stderr, " and then %lf\n", dx);
-      //fprintf(stderr, "Moving %lf hori, %lf\n", _dx, dt);
     }
     if (dy != 0) {
       _dy = dy * dt;
-      fprintf(stderr, "dy is: %lf", dy);
       dy = 0.0;
-      fprintf(stderr, " and then %lf\n", dy);
-      //fprintf(stderr, "Moving %lf vert, %lf\n", _dy, dt);
     }
+
     pthread_mutex_unlock(&updatePosition);
 
-    //fprintf(stderr, "Something about TIME: %ld from %ld\n", currtime, prevtime);
     //fprintf(stderr, "translate(%2.3lf, %2.3lf, %2.3lf)\n", _dx, _dy, _dz);
-    translate(_dx, _dy, _dz);
+    translateShape(triangle, _dx, _dy, _dz);
 
     prevtime = currtime;
     sleepfor(0.1); /* sleep for 0.1 seconds */
   }
   pthread_exit(NULL);
 }
-void keyboard(int key, int x, int y) {
 
+void *Debug(void *_data)  {
+  float tid;
+  char *buf;
+  char *shape, *x, *y, *w, *h;
+
+  tid = *((float*)(_data));
+  buf = malloc(sizeof(char)*1000);
+
+  fprintf(stdout, "Hello, I am the debugger %2.3lf!\n", tid);
+
+  while ((fgets(buf, 999, stdin)) != NULL) {
+    /* remove the newline */
+    buf[strlen(buf) - 1] = 0;
+
+    if (strcmp(buf, "help") == 0) {
+      fprintf(stdout, "Help\n----\n<shape> <x>,<y> <w> <h>\n");
+    } else {
+      /* tokenize by spaces */
+      shape = strtok_r(buf, " ", &buf);
+      x = strtok_r(NULL, ",", &buf);
+      y = strtok_r(NULL, " ", &buf);
+      w = strtok_r(NULL, " ", &buf);
+      h = strtok_r(NULL, " ", &buf);
+      if (x != NULL && y != NULL && w != NULL && h != NULL) {
+        fprintf(stdout, "We got %s: (%s,%s) (%s,%s)\n", shape, x, y, w, h);
+        addShapeList(shapeList, createTriangle(atof(x), atof(y), -10.0,
+                                               atof(w), atof(h), 0.0));
+      }
+    }
+
+    fprintf(stdout, "%s is funny\n", buf);
+  }
+
+  fprintf(stdout, "Done!\n");
+
+  free(buf);
+  pthread_exit(NULL);
+}
+
+void keyboard(int key, int x, int y) {
   switch(key) {
     case GLUT_KEY_UP:
       keys[UP] = KEY_DOWN;
@@ -166,6 +209,9 @@ void keyboard(int key, int x, int y) {
       break;
     case GLUT_KEY_RIGHT:
       keys[RIGHT] = KEY_DOWN;
+      break;
+    case ' ':
+      keys[SPACE] = KEY_DOWN;
       break;
   }
 }
@@ -183,18 +229,23 @@ void keyboardUp(int key, int x, int y) {
     case GLUT_KEY_RIGHT:
       keys[RIGHT] = KEY_UP;
       break;
+    case ' ':
+      keys[SPACE] = KEY_UP;
+      break;
   }
 }
-
-void translate(float x, float y, float z) {
-  triangle[0] += x;
-  triangle[1] += y;
-  triangle[2] += z;
+void _keyboard(unsigned char key, int x, int y) {
+  keyboard((int)key, x, y);
 }
+void _keyboardUp(unsigned char key, int x, int y) {
+  keyboardUp((int)key, x, y);
+}
+
 
 void initThreads() {
   int rc; /* return code */
   float tid = 0;
+
   pthread_attr_init(&attr);
   //pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_JOINABLE);
   pthread_mutex_init(&updatePosition, NULL);
@@ -202,14 +253,23 @@ void initThreads() {
   if (rc != 0) {
     fprintf(stderr, "Uh oh...\n");
   }
-  fprintf(stderr, "Created worker %lf\n", tid);
+  rc = pthread_create(&debug, &attr, Debug, (void *)&tid);
+  if (rc != 0) {
+    fprintf(stderr, "Uh oh...\n");
+  }
 }
+
 void initGlut() {
   glClearColor(0.0, 0.0, 0.0, 0.0);
   glEnable(GL_DEPTH_TEST);
   glShadeModel(GL_SMOOTH);
 }
+
 void init() {
+  shapeList = createShapeList();
+  triangle = createTriangle(0.0, 0.0, -10.0, 1.0, 1.0, 0.0);
+  addShapeList(shapeList, triangle);
+
   initThreads();
   initGlut();
 }
@@ -236,73 +296,19 @@ void display() {
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
   glLoadIdentity();
 
-  //drawShapeList();
-  drawTriangle();
-/*
-  glBegin(GL_TRIANGLES); //Begin triangle coordinates
-  //Triangle
-  glVertex3f(x[0][0], x[0][1], x[0][2]);
-  glVertex3f(-1.0f, 1.5f, -5.0f);
-  glVertex3f(-1.5f, 0.5f, -5.0f);
-  glEnd(); //End triangle coordinates
-*/
+  drawShapeList(shapeList);
+
   glutSwapBuffers();
 }
 void update() {
   float y;
-  printTriangle();
-  fprintf(stderr, "w: %3d, h: %3d\n", width, height);
 
-  getTriangleValues(NULL, &y, NULL, NULL, NULL);
+  getTriangleValues(triangle, NULL, &y, NULL, NULL, NULL);
   if (y > -2.0) {
     pthread_mutex_lock(&updatePosition);
     dy += -GRAV; /* gravity LOL */
     pthread_mutex_unlock(&updatePosition);
   }
-  pthread_mutex_lock(&updatePosition);
-  //fprintf(stderr, "dx: %2.3lf, dy %2.3lf, dz %2.3lf\n", dx, dy, dz);
-  pthread_mutex_unlock(&updatePosition);
+
   glutPostRedisplay();
-}
-void setTriangleValues(float x, float y, float z, float w, float h) {
-  triangle[0] = x;
-  triangle[1] = y;
-  triangle[2] = z;
-  triangle[3] = w;
-  triangle[4] = h;
-}
-void getTriangleValues(float *x, float *y, float *z, float *w, float *h) {
-  if (x != NULL) *x = triangle[0];
-  if (y != NULL) *y = triangle[1];
-  if (z != NULL) *z = triangle[2];
-  if (w != NULL) *w = triangle[3];
-  if (h != NULL) *h = triangle[4];
-}
-void drawTriangle() {
-  int i;
-  float points[3][3];
-  float x, y, z, w, h;
-  getTriangleValues(&x, &y, &z, &w, &h);
-
-  points[0][0] = x;
-  points[0][1] = y;
-  points[0][2] = z;
-  points[1][0] = x + (w / 2);
-  points[1][1] = y + h;
-  points[1][2] = z;
-  points[2][0] = x + w;
-  points[2][1] = y;
-  points[2][2] = z;
-
-  glBegin(GL_TRIANGLES);
-  for (i = 0; i < 3; i++) {
-    glVertex3f(points[i][0], points[i][1], points[i][2]);
-  }
-  glEnd();
-}
-void printTriangle(void) {
-  float x, y, z;
-  getTriangleValues(&x, &y, &z, NULL, NULL);
-
-  fprintf(stderr, "t: %2.3lf, %2.3lf, %2.3lf\n", x, y, z);
 }
