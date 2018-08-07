@@ -1,3 +1,10 @@
+/** @file main.c
+ * 
+ * @brief Bootstraps and runs the game
+ * 
+ * @par
+ * sea-grass - github.com/sea-grass
+ */
 #if __STDC_VERSION__ >= 199901L
 #define _XOPEN_SOURCE 600
 #else
@@ -11,12 +18,13 @@
 #define GRAV 9.81
 float floorLevel = -1.0;
 
-/* dx, dy, dz cannot be updated without first locking updatePosition */
-pthread_mutex_t updatePosition;
+/* dx, dy, dz cannot be updated without first locking mut_updatePosition */
+pthread_mutex_t mut_updatePosition;
 float dx = 0, dy = 0, dz = 0;
 
 /* vpx, vpy, vpz - viewpoint coordinates in the world */
 float vpx = 0.0, vpy = 0.0, vpz = 0.0;
+float z_backgroundDepth = -10.0;
 
 /* worker watches dx, dy, dz for changes and updates player coordinates */
 pthread_t worker,
@@ -26,6 +34,7 @@ pthread_attr_t attr;
 /* a list of shapes to be drawn to screen */
 ShapeList *shapeList;
 Shape *triangle;
+Shape *rectangle;
 
 int width = 0, height = 0;
 
@@ -123,8 +132,8 @@ void *Worker(void *_data) {
     if (prevtime == 0) prevtime = currtime;
     dt = currtime - prevtime;
 
-    if (_dx != 0 || _dy != 0 || _dx != 0) _dx = _dy = _dz = 0;
-    pthread_mutex_lock(&updatePosition);
+    _dx = _dy = _dz = 0;
+    pthread_mutex_lock(&mut_updatePosition);
     if (keys[UP] == KEY_DOWN) {
       dy += dif;
     }
@@ -147,7 +156,7 @@ void *Worker(void *_data) {
       dy = 0.0;
     }
 
-    pthread_mutex_unlock(&updatePosition);
+    pthread_mutex_unlock(&mut_updatePosition);
 
     //fprintf(stderr, "translate(%2.3lf, %2.3lf, %2.3lf)\n", _dx, _dy, _dz);
     translateShape(triangle, _dx, _dy, _dz);
@@ -249,7 +258,7 @@ void initThreads() {
 
   pthread_attr_init(&attr);
   //pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_JOINABLE);
-  pthread_mutex_init(&updatePosition, NULL);
+  pthread_mutex_init(&mut_updatePosition, NULL);
   rc = pthread_create(&worker, &attr, Worker, (void *)&tid);
   if (rc != 0) {
     fprintf(stderr, "Uh oh...\n");
@@ -268,7 +277,10 @@ void initGlut() {
 
 void init() {
   shapeList = createShapeList();
-  triangle = createTriangle(0.0, 0.0, -10.0, 1.0, 1.0, 0.0);
+  triangle = createTriangle(0.0, 0.0, z_backgroundDepth, 1.0, 1.0, 0.0);
+  // TODO: init rectangle
+  //rectangle = createRectangle();
+  rectangle = createRect(0.0, -1.0, z_backgroundDepth, width, 10.0, 0.0);
   addShapeList(shapeList, triangle);
 
   initThreads();
@@ -311,9 +323,9 @@ void update() {
   //getTriangleValues(triangle, &x, &y, &z, &w, &h);
   //fprintf(stderr, "T: %2.3lf, %2.3lf, %2.3lf - %2.3lfx%2.3lf\n", x, y, z, w, h);
   if (y > floorLevel) {
-    pthread_mutex_lock(&updatePosition);
+    pthread_mutex_lock(&mut_updatePosition);
     dy += -GRAV; /* gravity LOL */
-    pthread_mutex_unlock(&updatePosition);
+    pthread_mutex_unlock(&mut_updatePosition);
   }
 
   glutPostRedisplay();
